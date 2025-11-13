@@ -1,0 +1,9 @@
+To generate icons for this extension:
+
+1. Open ../generate-icons.html in your browser
+2. Click "Download All"
+3. Save icon16.png, icon48.png, and icon128.png to this folder
+
+Or use any icon generator online and create 16x16, 48x48, and 128x128 PNG files.
+
+The extension will work without icons, but they make it look more professional!
