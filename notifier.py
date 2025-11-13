@@ -71,11 +71,29 @@ class TelegramNotifier:
 
     def send_message_sync(self, message, parse_mode='HTML'):
         """Synchronous wrapper for send_message"""
-        return asyncio.run(self.send_message(message, parse_mode))
+        try:
+            loop = asyncio.get_event_loop()
+            if loop.is_closed():
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+        except RuntimeError:
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+
+        return loop.run_until_complete(self.send_message(message, parse_mode))
 
     def send_new_post_notification_sync(self, username, post_url, post_text=None):
         """Synchronous wrapper for send_new_post_notification"""
-        return asyncio.run(self.send_new_post_notification(username, post_url, post_text))
+        try:
+            loop = asyncio.get_event_loop()
+            if loop.is_closed():
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+        except RuntimeError:
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+
+        return loop.run_until_complete(self.send_new_post_notification(username, post_url, post_text))
 
 
 def load_config():

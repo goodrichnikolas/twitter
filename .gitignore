@@ -32,8 +32,8 @@ accounts.csv
 last_posts.json
 *.log
 
-# Browser session data (contains login cookies)
-browser_data/
+# API response dumps
+jsons/
 
 # IDE
 .vscode/

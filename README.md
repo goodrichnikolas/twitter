@@ -4,12 +4,11 @@ Monitor specific Twitter/X accounts and get instant Telegram notifications when 
 
 ## Features
 
-- 👀 Monitor any Twitter/X accounts (no login required)
+- 👀 Monitor any Twitter/X accounts via API
 - ⏰ Only notifies for recent posts (under 10 minutes old by default)
 - 📱 Instant Telegram notifications with post previews
-- 🤖 Runs its own browser (no Chrome setup needed)
-- ⚡ Smart timestamp checking to reduce API calls
 - 🔄 Continuous monitoring with configurable intervals
+- ⚡ No browser automation - uses paid API service
 
 ## Setup
 
@@ -36,10 +35,12 @@ Edit `config.json`:
     "bot_token": "YOUR_BOT_TOKEN_HERE",
     "chat_id": "YOUR_CHAT_ID_HERE"
   },
+  "api": {
+    "key": "YOUR_API_KEY_HERE"
+  },
   "monitoring": {
     "check_interval_seconds": 120,
-    "recent_post_minutes": 10,
-    "headless": true
+    "recent_post_minutes": 10
   }
 }
 ```
@@ -102,18 +103,6 @@ You should receive a test message in Telegram.
 
 ## Usage
 
-### First Time: Login Setup
-
-Since X/Twitter requires login to view posts, you need to log in once:
-
-1. Edit `config.json` and set `"headless": false`
-2. Run `python post_monitor.py`
-3. Browser will open - log in to X/Twitter
-4. Press Enter in terminal after logging in
-5. Your login is now saved!
-
-See [LOGIN_SETUP.md](LOGIN_SETUP.md) for detailed instructions.
-
 ### Start Monitoring
 
 ```bash
@@ -121,25 +110,23 @@ python post_monitor.py
 ```
 
 That's it! The script will:
-- Launch its own browser (headless by default)
-- Use your saved login session automatically
 - Load accounts from `accounts.csv`
-- Check each account every 2 minutes
+- Check each account every 2 minutes via API
 - Parse the timestamp of their most recent post
 - Only notify you if the post is under 10 minutes old
 - Keep running until you stop it (Ctrl+C)
 
 ### How It Works
 
-1. Every 2 minutes (configurable), the script checks each account
+1. Every 2 minutes (configurable), the script checks each account via API
 2. For each account, it:
-   - Navigates to their profile (e.g., https://x.com/vickyjadex)
-   - Finds their most recent post
-   - Checks the timestamp (e.g., "5m", "2h")
+   - Fetches their most recent posts via API
+   - Checks the timestamp
+   - Parses how many minutes ago it was posted
 3. If the post is under 10 minutes old, you get a Telegram notification
 4. Otherwise, it moves to the next account
 
-This approach minimizes notifications and API calls - you only get alerted for truly recent posts!
+This approach minimizes notifications - you only get alerted for truly recent posts!
 
 ## Files
 
@@ -163,7 +150,7 @@ This approach minimizes notifications and API calls - you only get alerted for t
 
 - `check_interval_seconds` - How often to check all accounts (120 = 2 minutes)
 - `recent_post_minutes` - Only notify for posts this recent (10 = last 10 minutes)
-- `headless` - Run browser in background (true) or visible (false)
+- `api.key` - Your API key for the Twitter/X API service
 
 ### `accounts.txt` Format
 
@@ -179,18 +166,18 @@ another_account
 
 - The system only notifies for recent posts (under 10 minutes by default)
 - Checks happen every 2 minutes, so you might catch posts that are 2-12 minutes old
-- Set `headless: false` to see the browser in action
-- Add as many accounts as you want to `accounts.txt`
+- Add as many accounts as you want to `accounts.csv`
 - The script will skip accounts that don't exist or are suspended
+- API usage depends on your service plan - monitor your usage/costs
 
 ## Compliance
 
 This system:
-- ✅ Only reads public information (no login required)
+- ✅ Uses official/authorized API service
+- ✅ Only reads public information
 - ✅ Respects rate limits with delays between checks
 - ✅ Doesn't automate posting or engagement
 - ✅ Requires manual user action to reply
-- ✅ Uses standard browser automation
 - ✅ Only monitors accounts you explicitly list
 
 You remain in control and manually choose when/how to respond to posts.
@@ -198,17 +185,18 @@ You remain in control and manually choose when/how to respond to posts.
 ## Troubleshooting
 
 **"No accounts found"**
-- Create `accounts.txt` with one username per line
+- Run `account_scraper.py` to generate `accounts.csv`
+- Or create `accounts.txt` with one username per line
 - Make sure there are no typos in usernames
 
-**"Could not parse timestamp"**
-- Twitter sometimes shows full dates instead of relative times (e.g., "Jan 1")
-- The script will skip these and move to the next account
-- This usually happens with older posts
+**"API key not found"**
+- Add your API key to `config.json` in the `api` section
+- Make sure the key is valid and has necessary permissions
 
-**Browser issues**
-- Set `"headless": false` in config.json to see what's happening
-- Make sure you have playwright browsers installed: `playwright install chromium`
+**"API rate limit exceeded"**
+- Your API service may have rate limits
+- Increase `check_interval_seconds` in config.json
+- Consider upgrading your API plan
 
 **Telegram notifications not working**
 - Run `python notifier.py` to test
