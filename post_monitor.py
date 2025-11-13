@@ -9,6 +9,7 @@ import csv
 from datetime import datetime
 from twitterapi_io.client import TwitterAPIClient
 from notifier import TelegramNotifier
+from monitor_state import MonitorState
 
 
 def load_config():
@@ -63,7 +64,7 @@ def load_accounts(filename='accounts.csv'):
             return []
 
 
-def monitor_accounts(api_client, notifier, accounts, recent_minutes, check_interval):
+def monitor_accounts(api_client, notifier, accounts, recent_minutes, check_interval, state):
     """
     Check accounts for recent posts.
 
@@ -73,39 +74,69 @@ def monitor_accounts(api_client, notifier, accounts, recent_minutes, check_inter
         accounts: List of usernames to monitor
         recent_minutes: Only notify if post is within this many minutes
         check_interval: Seconds to wait between checking each account
+        state: MonitorState instance for tracking notifications and cooldowns
     """
-    print(f"\n[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] Checking {len(accounts)} accounts...")
+    # Filter out accounts in cooldown
+    accounts_to_check = []
+    accounts_in_cooldown = []
+
+    for username in accounts:
+        if state.is_in_cooldown(username, cooldown_minutes=recent_minutes):
+            remaining = state.get_cooldown_remaining(username, cooldown_minutes=recent_minutes)
+            accounts_in_cooldown.append((username, remaining))
+        else:
+            accounts_to_check.append(username)
+
+    print(f"\n[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] Checking {len(accounts_to_check)} accounts...")
     print(f"Will notify for posts under {recent_minutes} minutes old")
+    if accounts_in_cooldown:
+        print(f"Skipping {len(accounts_in_cooldown)} accounts in cooldown")
     print(f"Checking 1 account every {check_interval} seconds\n")
 
     recent_posts_found = 0
 
-    for i, username in enumerate(accounts, 1):
+    for i, username in enumerate(accounts_to_check, 1):
         cycle_start = time.time()
-        print(f"[{i}/{len(accounts)}] Checking @{username}...")
+        print(f"[{i}/{len(accounts_to_check)}] Checking @{username}...")
 
         rate_limited = False
+        notification_sent = False
 
         try:
             recent_post = api_client.is_recent_post(username, minutes_threshold=recent_minutes)
 
             if recent_post:
-                # Recent post found
-                minutes_ago = recent_post['minutes_ago']
-                print(f"  🚨 RECENT POST! Posted {minutes_ago:.1f} minutes ago")
-                print(f"  URL: {recent_post['url']}")
-                recent_posts_found += 1
+                tweet_id = recent_post.get('tweet_id')
 
-                # Send notification
-                success = notifier.send_new_post_notification_sync(
-                    username=username,
-                    post_url=recent_post['url'],
-                    post_text=recent_post['text'][:200]
-                )
-                if success:
-                    print(f"  ✓ Telegram notification sent")
+                # Check if we've already notified about this tweet
+                if tweet_id and state.has_been_notified(tweet_id):
+                    print(f"  ℹ️  Recent post found but already notified (skipping)")
+                    print(f"  Tweet ID: {tweet_id}")
                 else:
-                    print(f"  ⚠️  Telegram notification failed")
+                    # Recent post found and not yet notified
+                    minutes_ago = recent_post['minutes_ago']
+                    print(f"  🚨 RECENT POST! Posted {minutes_ago:.1f} minutes ago")
+                    print(f"  URL: {recent_post['url']}")
+                    if tweet_id:
+                        print(f"  Tweet ID: {tweet_id}")
+                    recent_posts_found += 1
+
+                    # Send notification
+                    success = notifier.send_new_post_notification_sync(
+                        username=username,
+                        post_url=recent_post['url'],
+                        post_text=recent_post['text'][:200]
+                    )
+                    if success:
+                        print(f"  ✓ Telegram notification sent")
+                        notification_sent = True
+
+                        # Mark as notified and set cooldown
+                        if tweet_id:
+                            state.mark_as_notified(tweet_id, username)
+                            print(f"  ✓ Cooldown activated ({recent_minutes} minutes)")
+                    else:
+                        print(f"  ⚠️  Telegram notification failed")
 
             else:
                 print(f"  None found in the past {recent_minutes} minutes")
@@ -118,21 +149,25 @@ def monitor_accounts(api_client, notifier, accounts, recent_minutes, check_inter
             if "Rate limit exceeded" in error_msg:
                 rate_limited = True
 
-        # Wait before next check (unless it's the last account)
+        # Only wait if we sent a notification or got rate limited (unless it's the last account)
         if i < len(accounts):
-            elapsed = time.time() - cycle_start
-            sleep_time = max(0, check_interval - elapsed)
+            if rate_limited or notification_sent:
+                elapsed = time.time() - cycle_start
+                sleep_time = max(0, check_interval - elapsed)
 
-            # If rate limited, wait extra time
-            if rate_limited:
-                sleep_time = max(sleep_time, 60)  # Wait at least 60 seconds
-                print(f"  ⏳ Rate limited! Waiting {sleep_time:.0f} seconds...\n")
-            elif sleep_time > 0:
-                print(f"  Waiting {sleep_time:.0f} seconds before next check...\n")
+                # If rate limited, wait extra time
+                if rate_limited:
+                    sleep_time = max(sleep_time, 60)  # Wait at least 60 seconds
+                    print(f"  ⏳ Rate limited! Waiting {sleep_time:.0f} seconds...\n")
+                elif sleep_time > 0:
+                    print(f"  Waiting {sleep_time:.0f} seconds before next check...\n")
+                else:
+                    print()
+
+                time.sleep(sleep_time) if sleep_time > 0 else None
             else:
+                # No notification sent and not rate limited - continue immediately
                 print()
-
-            time.sleep(sleep_time) if sleep_time > 0 else None
 
     if recent_posts_found > 0:
         print(f"\n✓ Found {recent_posts_found} recent post(s)!")
@@ -175,6 +210,10 @@ def main():
     api_client = TwitterAPIClient(api_key)
     notifier = TelegramNotifier(bot_token, chat_id)
 
+    # Initialize state manager
+    state = MonitorState()
+    stats = state.get_stats()
+
     # Calculate cycle time
     total_cycle_time = len(accounts) * check_interval
     cycle_minutes = total_cycle_time / 60
@@ -184,7 +223,11 @@ def main():
     print(f"  Accounts: {len(accounts)}")
     print(f"  Check interval: {check_interval} seconds between accounts")
     print(f"  Recent threshold: {recent_minutes} minutes")
+    print(f"  Cooldown period: {recent_minutes} minutes after notification")
     print(f"  Estimated cycle time: {cycle_minutes:.1f} minutes ({cycle_hours:.1f} hours)")
+    print(f"\nState:")
+    print(f"  Tweets tracked: {stats['total_tweets_tracked']}")
+    print(f"  Accounts in cooldown: {stats['accounts_in_cooldown']}")
     print()
     print("Press Ctrl+C to stop")
     print("=" * 70)
@@ -208,7 +251,7 @@ def main():
             print(f"{'='*70}")
 
             try:
-                monitor_accounts(api_client, notifier, accounts, recent_minutes, check_interval)
+                monitor_accounts(api_client, notifier, accounts, recent_minutes, check_interval, state)
 
             except KeyboardInterrupt:
                 raise

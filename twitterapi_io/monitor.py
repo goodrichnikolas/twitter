@@ -19,6 +19,7 @@ from typing import List
 
 from .client import TwitterAPIClient
 from notifier import TelegramNotifier
+from monitor_state import MonitorState
 
 
 def load_accounts(csv_path: str = 'accounts.csv') -> List[str]:
@@ -63,7 +64,8 @@ def monitor_accounts(
     notifier: TelegramNotifier,
     accounts: List[str],
     recent_minutes: int = 10,
-    check_interval: int = 60
+    check_interval: int = 60,
+    state: MonitorState = None
 ):
     """
     Monitor accounts for recent posts.
@@ -74,41 +76,76 @@ def monitor_accounts(
         accounts: List of usernames to monitor
         recent_minutes: Threshold for recent posts (default: 10)
         check_interval: Seconds to wait between checks (default: 60)
+        state: MonitorState for tracking notifications and cooldowns
     """
-    total_accounts = len(accounts)
+    # Initialize state if not provided
+    if state is None:
+        state = MonitorState()
+
+    # Filter out accounts in cooldown
+    accounts_to_check = []
+    accounts_in_cooldown = []
+
+    for username in accounts:
+        if state.is_in_cooldown(username, cooldown_minutes=recent_minutes):
+            remaining = state.get_cooldown_remaining(username, cooldown_minutes=recent_minutes)
+            accounts_in_cooldown.append((username, remaining))
+        else:
+            accounts_to_check.append(username)
+
+    total_accounts = len(accounts_to_check)
     estimated_time = (total_accounts * check_interval) / 60  # in minutes
 
     print(f"\n{'='*70}")
     print(f"Starting monitoring cycle")
     print(f"Accounts to check: {total_accounts}")
+    if accounts_in_cooldown:
+        print(f"Accounts in cooldown: {len(accounts_in_cooldown)}")
     print(f"Check interval: {check_interval} seconds")
     print(f"Recent threshold: {recent_minutes} minutes")
     print(f"Estimated cycle time: {estimated_time:.1f} minutes ({estimated_time/60:.1f} hours)")
     print(f"{'='*70}\n")
 
-    for i, username in enumerate(accounts, 1):
+    for i, username in enumerate(accounts_to_check, 1):
         cycle_start = time.time()
 
         print(f"[{i}/{total_accounts}] Checking @{username}...")
+
+        notification_sent = False
 
         try:
             # Check for recent post
             recent_post = api_client.is_recent_post(username, minutes_threshold=recent_minutes)
 
             if recent_post:
-                # Recent post found - alert!
-                minutes_ago = recent_post['minutes_ago']
-                print(f"  🚨 RECENT POST FOUND! Posted {minutes_ago:.1f} minutes ago")
-                print(f"  URL: {recent_post['url']}")
+                tweet_id = recent_post.get('tweet_id')
 
-                # Send Telegram notification
-                notifier.send_new_post_notification_sync(
-                    username=username,
-                    post_url=recent_post['url'],
-                    post_text=recent_post['text'][:200]  # Limit text length
-                )
+                # Check if we've already notified about this tweet
+                if tweet_id and state.has_been_notified(tweet_id):
+                    print(f"  ℹ️  Recent post found but already notified (skipping)")
+                    print(f"  Tweet ID: {tweet_id}")
+                else:
+                    # Recent post found and not yet notified
+                    minutes_ago = recent_post['minutes_ago']
+                    print(f"  🚨 RECENT POST! Posted {minutes_ago:.1f} minutes ago")
+                    print(f"  URL: {recent_post['url']}")
+                    if tweet_id:
+                        print(f"  Tweet ID: {tweet_id}")
 
-                print(f"  ✓ Telegram notification sent")
+                    # Send Telegram notification
+                    notifier.send_new_post_notification_sync(
+                        username=username,
+                        post_url=recent_post['url'],
+                        post_text=recent_post['text'][:200]  # Limit text length
+                    )
+
+                    print(f"  ✓ Telegram notification sent")
+                    notification_sent = True
+
+                    # Mark as notified and set cooldown
+                    if tweet_id:
+                        state.mark_as_notified(tweet_id, username)
+                        print(f"  ✓ Cooldown activated ({recent_minutes} minutes)")
 
             else:
                 # No recent post
@@ -117,16 +154,21 @@ def monitor_accounts(
         except Exception as e:
             print(f"  ❌ Error: {e}")
 
-        # Wait before next check (unless it's the last account)
+        # Only wait if we sent a notification (unless it's the last account)
         if i < total_accounts:
-            elapsed = time.time() - cycle_start
-            sleep_time = max(0, check_interval - elapsed)
+            if notification_sent:
+                # Wait after sending notification
+                elapsed = time.time() - cycle_start
+                sleep_time = max(0, check_interval - elapsed)
 
-            if sleep_time > 0:
-                print(f"  Waiting {sleep_time:.0f} seconds before next check...\n")
-                time.sleep(sleep_time)
+                if sleep_time > 0:
+                    print(f"  Waiting {sleep_time:.0f} seconds before next check...\n")
+                    time.sleep(sleep_time)
+                else:
+                    print()  # Just add newline if no sleep needed
             else:
-                print()  # Just add newline if no sleep needed
+                # No notification sent - continue immediately
+                print()
 
     print(f"{'='*70}")
     print(f"Cycle complete! Checked {total_accounts} accounts")
@@ -150,6 +192,10 @@ def run_continuous_monitoring(
         recent_minutes: Threshold for recent posts (default: 10)
         check_interval: Seconds to wait between checks (default: 60)
     """
+    # Initialize state manager
+    state = MonitorState()
+    stats = state.get_stats()
+
     cycle_number = 0
 
     print(f"\n{'='*70}")
@@ -158,6 +204,10 @@ def run_continuous_monitoring(
     print(f"Monitoring {len(accounts)} accounts")
     print(f"Check interval: {check_interval} seconds between accounts")
     print(f"Recent threshold: {recent_minutes} minutes")
+    print(f"Cooldown period: {recent_minutes} minutes after notification")
+    print(f"\nState:")
+    print(f"  Tweets tracked: {stats['total_tweets_tracked']}")
+    print(f"  Accounts in cooldown: {stats['accounts_in_cooldown']}")
     print(f"\nPress Ctrl+C to stop")
     print(f"{'='*70}\n")
 
@@ -181,7 +231,8 @@ def run_continuous_monitoring(
                 notifier=notifier,
                 accounts=accounts,
                 recent_minutes=recent_minutes,
-                check_interval=check_interval
+                check_interval=check_interval,
+                state=state
             )
 
             print(f"Cycle #{cycle_number} complete. Starting next cycle...\n")

@@ -110,6 +110,38 @@ def load_existing_accounts(csv_path: Path) -> set[str]:
     return existing
 
 
+def load_small_accounts(csv_path: Path) -> set[str]:
+    """
+    Load small accounts from CSV (accounts filtered out by filter.py).
+
+    Args:
+        csv_path: Path to small_accounts.csv
+
+    Returns:
+        Set of small account usernames
+    """
+    if not csv_path.exists():
+        return set()
+
+    small = set()
+    try:
+        with open(csv_path, 'r', newline='', encoding='utf-8') as f:
+            reader = csv.reader(f)
+            for row in reader:
+                # Skip empty rows and comments
+                if not row or not row[0] or row[0].startswith('#'):
+                    continue
+
+                username = row[0].strip()
+                if username and username != 'username':  # Skip header
+                    small.add(username)
+    except Exception as e:
+        print(f"Warning: Could not read {csv_path}: {e}")
+        return set()
+
+    return small
+
+
 def save_accounts_csv(accounts: set[str], csv_path: Path):
     """
     Save accounts to CSV file.
@@ -138,6 +170,7 @@ def main():
     # Configuration
     html_folder = Path('x_home')
     csv_path = Path('accounts.csv')
+    small_accounts_path = Path('small_accounts.csv')
 
     print("=" * 70)
     print("X/Twitter Account Scraper - HTML Parser")
@@ -183,6 +216,11 @@ def main():
     # Load existing accounts from CSV
     existing_accounts = load_existing_accounts(csv_path)
     print(f"📊 Existing accounts in {csv_path}: {len(existing_accounts)}")
+
+    # Load small accounts (filtered out by filter.py)
+    small_accounts = load_small_accounts(small_accounts_path)
+    if small_accounts:
+        print(f"🚫 Small accounts to exclude: {len(small_accounts)}")
     print()
 
     # Process all HTML files
@@ -210,6 +248,14 @@ def main():
     print("─" * 70)
     print(f"📈 Summary:")
     print(f"   Total unique usernames found in HTML files: {len(all_new_profiles)}")
+
+    # Filter out small accounts
+    if small_accounts:
+        filtered_profiles = all_new_profiles - small_accounts
+        excluded_count = len(all_new_profiles) - len(filtered_profiles)
+        if excluded_count > 0:
+            print(f"   Excluded small accounts: {excluded_count}")
+        all_new_profiles = filtered_profiles
 
     # Combine with existing accounts
     combined_accounts = existing_accounts | all_new_profiles
