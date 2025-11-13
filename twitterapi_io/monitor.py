@@ -107,6 +107,19 @@ def monitor_accounts(
     print(f"{'='*70}\n")
 
     for i, username in enumerate(accounts_to_check, 1):
+        # Check for Telegram commands before each account check
+        try:
+            command_result = notifier.process_commands()
+            if command_result and command_result.get('success'):
+                removed = command_result['removed']
+                print(f"  ℹ️  Removed @{removed} from monitoring via Telegram command")
+                # If we removed the current account, skip it
+                if removed == username:
+                    print(f"  Skipping @{username} (just removed)\n")
+                    continue
+        except Exception as e:
+            pass  # Silently ignore command check errors
+
         cycle_start = time.time()
 
         print(f"[{i}/{total_accounts}] Checking @{username}...")
